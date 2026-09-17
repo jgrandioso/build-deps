@@ -1,0 +1,81 @@
+Push live avctx->bit_rate changes to an already-initialized AMF component
+(TARGET_BITRATE/PEAK_BITRATE) instead of only setting them once at Init().
+AMD's own SDK headers document these as dynamic properties - can be set
+at any time on an active AMFComponent, no reconfigure/recreate needed.
+
+diff --git a/libavcodec/amfenc.c b/libavcodec/amfenc.c
+index 3ffca75..aeecd5c 100644
+--- a/libavcodec/amfenc.c
++++ b/libavcodec/amfenc.c
+@@ -576,6 +576,41 @@ static AMF_RESULT amf_query_output(AVCodecContext *avctx, AMFBuffer **buffer)
+     return ret;
+ }
+ 
++// Pushes a live avctx->bit_rate change to an already-initialized AMF component.
++// TARGET_BITRATE/PEAK_BITRATE are documented as dynamic properties ("can be set
++// at any time") in AMD's own SDK headers, unlike most other encoder options here
++// which only take effect at Init(). Mirrors the property names each codec's own
++// amf_encode_init_*() uses at init time. PEAK_BITRATE is only touched in CBR mode,
++// matching what init does - other rate control modes derive it from rc_max_rate,
++// which this does not attempt to reconfigure live. (Apollo fork addition.)
++static void amf_apply_dynamic_bitrate(AVCodecContext *avctx, AMFEncoderContext *ctx)
++{
++    AMF_RESULT res;
++
++    switch (avctx->codec_id) {
++    case AV_CODEC_ID_H264:
++        AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_TARGET_BITRATE, avctx->bit_rate);
++        if (ctx->rate_control_mode == AMF_VIDEO_ENCODER_RATE_CONTROL_METHOD_CBR) {
++            AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_PEAK_BITRATE, avctx->bit_rate);
++        }
++        break;
++    case AV_CODEC_ID_HEVC:
++        AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_HEVC_TARGET_BITRATE, avctx->bit_rate);
++        if (ctx->rate_control_mode == AMF_VIDEO_ENCODER_HEVC_RATE_CONTROL_METHOD_CBR) {
++            AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_HEVC_PEAK_BITRATE, avctx->bit_rate);
++        }
++        break;
++    case AV_CODEC_ID_AV1:
++        AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_AV1_TARGET_BITRATE, avctx->bit_rate);
++        if (ctx->rate_control_mode == AMF_VIDEO_ENCODER_AV1_RATE_CONTROL_METHOD_CBR) {
++            AMF_ASSIGN_PROPERTY_INT64(res, ctx->encoder, AMF_VIDEO_ENCODER_AV1_PEAK_BITRATE, avctx->bit_rate);
++        }
++        break;
++    default:
++        return;
++    }
++}
++
+ int ff_amf_receive_packet(AVCodecContext *avctx, AVPacket *avpkt)
+ {
+     AMFEncoderContext     *ctx = avctx->priv_data;
+@@ -593,6 +628,13 @@ int ff_amf_receive_packet(AVCodecContext *avctx, AVPacket *avpkt)
+         av_frame_free(&frame);
+         return AVERROR(EINVAL);
+     }
++
++    // Apollo fork addition: pick up live avctx->bit_rate changes without reinit.
++    if (avctx->bit_rate && avctx->bit_rate != ctx->applied_bitrate) {
++        amf_apply_dynamic_bitrate(avctx, ctx);
++        ctx->applied_bitrate = avctx->bit_rate;
++    }
++
+     // check if some outputs are available
+     av_fifo_read(ctx->output_list, &buffer, 1);
+     if (buffer != NULL) { // return already retrieved output
+diff --git a/libavcodec/amfenc.h b/libavcodec/amfenc.h
+index 1571541..45a472e 100644
+--- a/libavcodec/amfenc.h
++++ b/libavcodec/amfenc.h
+@@ -101,6 +101,11 @@ typedef struct AMFEncoderContext {
+     int                 hw_high_motion_quality_boost;
+     int                 forced_idr;
+ 
++    // Last bitrate value applied to the AMF component via SetProperty().
++    // Used by ff_amf_receive_packet() to detect live changes to avctx->bit_rate
++    // and push them to the encoder without a full re-init (Apollo fork addition).
++    int64_t             applied_bitrate;
++
+     // HEVC - specific options
+ 
+     int                 gops_per_idr;
