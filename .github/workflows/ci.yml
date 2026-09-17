@@ -21,31 +21,16 @@ env:
   MACOSX_DEPLOYMENT_TARGET: '14.0'
 
 jobs:
-  release-setup:
-    name: Release Setup
-    outputs:
-      publish_release: ${{ steps.release-setup.outputs.publish_release }}
-      release_body: ${{ steps.release-setup.outputs.release_body }}
-      release_commit: ${{ steps.release-setup.outputs.release_commit }}
-      release_generate_release_notes: ${{ steps.release-setup.outputs.release_generate_release_notes }}
-      release_tag: ${{ steps.release-setup.outputs.release_tag }}
-      release_version: ${{ steps.release-setup.outputs.release_version }}
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-
-      - name: Release Setup
-        id: release-setup
-        uses: LizardByte/actions/actions/release_setup@39c468549cfb87ccb917e5e5342e18abc926dc48  # v2026.909.30231
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-
+  # release-setup removed on this fork: its reusable action crashes
+  # (KeyError: 'commits') on workflow_dispatch, and nothing on this fork
+  # consumes its outputs - the "release" job that did was org-gated and
+  # removed below too.
   build:
     name: ${{ matrix.build }} - ${{ matrix.name }}
-    needs: release-setup
+    # needs: release-setup removed on this fork - release_setup's own script
+    # crashes (KeyError: 'commits') when triggered via workflow_dispatch
+    # instead of a real push event, and build doesn't consume any of its
+    # outputs anyway (only the org-gated "release" job below does).
     permissions:
       contents: read
     runs-on: ${{ matrix.os }}
@@ -584,36 +569,6 @@ jobs:
       - name: Conclude
         run: echo "All tests passed"
 
-  release:
-    name: Create Release
-    if:
-      needs.release-setup.outputs.publish_release == 'true' &&
-      startsWith(github.repository, 'LizardByte/')
-    needs:
-      - release-setup
-      - build
-    permissions:
-      contents: read
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Debug artifacts
-        run: ls -R artifacts
-
-      - name: Create/Update GitHub Release
-        uses: LizardByte/actions/actions/release_create@39c468549cfb87ccb917e5e5342e18abc926dc48  # v2026.909.30231
-        with:
-          allowUpdates: false
-          body: ${{ needs.release-setup.outputs.release_body }}
-          draft: true
-          generateReleaseNotes: ${{ needs.release-setup.outputs.release_generate_release_notes }}
-          name: ${{ needs.release-setup.outputs.release_tag }}
-          prerelease: true
-          tag: ${{ needs.release-setup.outputs.release_tag }}
-          token: ${{ secrets.GH_BOT_TOKEN }}
-          virustotal_api_key: ${{ secrets.VIRUSTOTAL_API_KEY }}
+  # release job removed on this fork: gated on startsWith(github.repository,
+  # 'LizardByte/') so it would never run here anyway, and it depended on the
+  # now-removed release-setup job's outputs.
